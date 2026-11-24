@@ -1,0 +1,38 @@
+name: Publish audio
+
+# Push MP3s named <bookId>_<chapter>.mp3 (e.g. gen_1.mp3) into the audio/ folder of a branch
+# called "audio-inbox". This uploads them to the "audio" release, where the app streams them from,
+# then deletes the branch so the recordings don't bloat the repository.
+on:
+  push:
+    branches: [audio-inbox]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audio-inbox
+      - name: Upload recordings to the "audio" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(audio/*.mp3)
+          if [ ${#files[@]} -eq 0 ]; then echo "No MP3s in audio/"; exit 0; fi
+          for f in "${files[@]}"; do
+            [[ "$(basename "$f")" =~ ^[0-9a-z]{3}_[0-9]+\.mp3$ ]] || { echo "Bad name: $f (expected e.g. gen_1.mp3)"; exit 1; }
+          done
+          gh release view audio >/dev/null 2>&1 || \
+            gh release create audio --title "Audio recordings" --latest=false \
+              --notes "Chapter recordings streamed by the app. Files are named <bookId>_<chapter>.mp3."
+          gh release upload audio "${files[@]}" --clobber
+          gh release edit audio --draft=false --latest=false
+          gh release view audio --json assets --jq '.assets[].name' | sort
+      - name: Remove the upload branch
+        run: git push origin --delete audio-inbox
