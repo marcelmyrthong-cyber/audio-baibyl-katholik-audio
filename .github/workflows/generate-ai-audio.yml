@@ -1,0 +1,86 @@
+name: Generate AI audio
+
+# Reads chapters aloud with the Khasi-trained voice model in Marcel's cloned voice.
+# "preview" puts the MP3s in the "ai-preview" release to listen to first; "app" puts them in the
+# "audio" release that the app plays. Chapters already in the chosen release are skipped, so human
+# recordings are never replaced, and running it again simply finishes whatever is still missing.
+on:
+  # A push to a claude/ branch reads Jenesis 2 into the preview release, as a quick check.
+  push:
+    branches: ['claude/**']
+    paths: ['tools/tts/**', '.github/workflows/generate-ai-audio.yml']
+  workflow_dispatch:
+    inputs:
+      books: { description: 'Books: gen, or gen,exo, or all', default: 'gen' }
+      chapters: { description: 'Chapters: empty for all, or 2, or 2-5', default: '' }
+      publish_to: { description: 'preview or app', default: 'preview' }
+      chars_per_job: { description: 'Text per parallel job (characters)', default: '6000' }
+      num_step: { description: 'Model steps (32 = best, 16 = twice as fast)', default: '32' }
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generate-ai-audio-${{ inputs.publish_to || 'preview' }}-${{ inputs.books || 'gen' }}
+
+env:
+  BOOKS: ${{ inputs.books || 'gen' }}
+  CHAPTERS: ${{ github.event_name == 'push' && '2' || inputs.chapters }}
+  RELEASE: ${{ inputs.publish_to == 'app' && 'audio' || 'ai-preview' }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::Add the HF_TOKEN secret under Settings > Secrets and variables > Actions > Repository secrets."
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $HF_TOKEN" \
+            https://huggingface.co/toiar/Khasi-OmniVoice-TTS-2/resolve/main/config.json)
+          [ "$code" = 200 ] || { echo "::error::HF_TOKEN cannot open toiar/Khasi-OmniVoice-TTS-2 (HTTP $code). Accept the model's terms on Hugging Face."; exit 1; }
+      - name: Make sure the release exists
+        run: |
+          gh release view "$RELEASE" >/dev/null 2>&1 || gh release create "$RELEASE" --prerelease --latest=false \
+            --title "$RELEASE" --notes "Chapter audio, files named <bookId>_<chapter>.mp3."
+      - id: plan
+        run: echo "matrix=$(python3 tools/tts/khasi_tts.py plan "$BOOKS" "$CHAPTERS" "$RELEASE" '${{ inputs.chars_per_job || 6000 }}')" >> "$GITHUB_OUTPUT"
+
+  speak:
+    needs: plan
+    if: ${{ !contains(needs.plan.outputs.matrix, '"none"') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TTS_MODEL: toiar/Khasi-OmniVoice-TTS-2
+      NUM_STEP: ${{ inputs.num_step || 32 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: .github/workflows/generate-ai-audio.yml
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-khasi-omnivoice-2
+      - name: Install
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install --quiet torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet omnivoice==0.2.1 soundfile
+      - name: Read chapters aloud
+        run: python tools/tts/khasi_tts.py speak '${{ matrix.items }}' "$RELEASE" 320
