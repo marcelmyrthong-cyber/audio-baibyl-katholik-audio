@@ -1,0 +1,30 @@
+name: Publish app
+
+# Uploads app/Audio-Baibyl-Katholik.apk to the "app" release, so anyone can download it from
+#   https://github.com/marcelmyrthong-cyber/audio-baibyl-katholik-audio/releases/download/app/Audio-Baibyl-Katholik.apk
+# (the code repository is private, so its release links need a login).
+on:
+  push:
+    paths: ["app/*.apk", ".github/workflows/publish-app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload the APK to the "app" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          f=app/Audio-Baibyl-Katholik.apk
+          [ -f "$f" ] || { echo "No $f"; exit 0; }
+          gh release view app >/dev/null 2>&1 || \
+            gh release create app --title "Ka Audio Baibyl Katholik app" --latest=false \
+              --notes "Android app. Download Audio-Baibyl-Katholik.apk on your phone and open it to install."
+          gh release upload app "$f" --clobber
+          gh release edit app --draft=false --latest=false
+          gh release view app --json assets --jq '.assets[] | "\(.name) \(.size)"'
