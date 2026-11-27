@@ -5,7 +5,7 @@ name: Publish audio
 # then deletes the branch so the recordings don't bloat the repository.
 on:
   push:
-    branches: [audio-inbox]
+    branches: [audio-inbox, 'claude/**']
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: audio-inbox
       - name: Upload recordings to the "audio" release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,4 +34,5 @@ jobs:
           gh release edit audio --draft=false --latest=false
           gh release view audio --json assets --jq '.assets[].name' | sort
       - name: Remove the upload branch
+        if: github.ref_name == 'audio-inbox'
         run: git push origin --delete audio-inbox
